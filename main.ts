@@ -164,9 +164,11 @@ function flatForecast(c: Case): Array<{ id: number; q: number[] }> {
 
 type FormName = 'log' | 'sqrt' | 'linear';
 const FORM_NAMES: FormName[] = ['log', 'sqrt', 'linear'];
-/** Time transforms. sqrt clamps at 0: launch-night reads sit just before h=0. */
+/** Time transforms. sqrt clamps at 0 and log floors at -0.999: launch-night
+ * reads sit just before h=0, and a hypothetical pre-release read must never
+ * make a transform NaN. */
 const FORMS: Record<FormName, (h: number) => number> = {
-  log: (h) => Math.log1p(h),
+  log: (h) => Math.log1p(Math.max(h, -0.999)),
   sqrt: (h) => Math.sqrt(Math.max(h, 0)),
   linear: (h) => h,
 };
@@ -427,9 +429,16 @@ function fittedForecast(c: Case): Array<{ id: number; q: number[] }> {
     } else {
       median = logit(0.01);
     }
+    // A non-finite slope or transform must never poison the row: fall back
+    // to persistence at the last rate.
+    if (!Number.isFinite(median)) {
+      median = Number.isFinite(lastRate[i]) ? logit(lastRate[i]) : logit(0.01);
+    }
     // 2.4 Spread: fit residual plus a random-walk term over the horizon.
-    const days = (hTarget - hLastT[i]) / 24;
+    // A target before the last read gives no diffusion (days floored at 0).
+    const days = Math.max(0, (hTarget - hLastT[i]) / 24);
     let sigma = Math.sqrt(resid[i] * resid[i] + Math.pow(DIFFUSION * Math.sqrt(days), 2));
+    if (!Number.isFinite(sigma)) sigma = SIGMA_FLOOR;
     sigma = Math.min(SIGMA_CAP, Math.max(SIGMA_FLOOR, sigma));
     medians.push(median);
     sigmas.push(sigma);
